@@ -95,7 +95,7 @@ application_stop(A) when is_atom(A) ->
     application:stop(A).
 
 %%%------------------------------------------------------------------------
-%%% Callback functions from gen_server
+%%% Private functions
 %%%------------------------------------------------------------------------
 
 application_started(A) ->
