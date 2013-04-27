@@ -1,18 +1,8 @@
-%%% -*- coding: utf-8; Mode: erlang; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*-
-%%% ex: set softtabstop=4 tabstop=4 shiftwidth=4 expandtab fileencoding=utf-8:
-
 {application, reltool_util,
-  [{description, "reltool Utility Functions"},
+  [{description, "Reltool Utility Functions"},
    {vsn, "0.1.0"},
-   {modules, [
-        ]},
-   {registered,[
-        ]},
-   {included_applications, [
-        ]},
-   {applications, [
-        stdlib,
-        kernel
-        ]},
+   {modules, [reltool_util]},
+   {registered, []},
+   {applications, [stdlib, kernel]},
    {start_phases, []}]}.
 
