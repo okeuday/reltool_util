@@ -67,6 +67,10 @@
 %% @end
 %%-------------------------------------------------------------------------
 
+-spec application_start(Application :: atom()) ->
+    ok |
+    {error, any()}.
+
 application_start(Application) ->
     application_start(Application, []).
 
@@ -76,17 +80,34 @@ application_start(Application) ->
 %% @end
 %%-------------------------------------------------------------------------
 
+-spec application_start(Application :: atom(),
+                        Env :: list({atom(), any()})) ->
+    ok |
+    {error, any()}.
+
 application_start(Application, Env)
     when is_atom(Application), is_list(Env) ->
-    ok = application_loaded(Application),
-    lists:foreach(fun({K, V}) ->
-        ok = application:set_env(Application, K, V)
-    end, Env),
-    lists:foreach(fun(A) ->
-        ok = application_started(A)
-    end, applications_dependencies(Application)),
-    ok = application_started(Application),
-    ok.
+    case application_loaded(Application) of
+        ok ->
+            case application_start_set_env(Env, Application) of
+                ok ->
+                    case applications_dependencies(Application) of
+                        {ok, As} ->
+                            case application_start_dependencies(As) of
+                                ok ->
+                                    application_started(Application);
+                                {error, _} = Error ->
+                                    Error
+                            end;
+                        {error, _} = Error ->
+                            Error
+                    end;
+                {error, _} = Error ->
+                    Error
+            end;
+        {error, _} = Error ->
+            Error
+    end.
 
 %%-------------------------------------------------------------------------
 %% @doc
@@ -94,27 +115,36 @@ application_start(Application, Env)
 %% @end
 %%-------------------------------------------------------------------------
 
-application_stop(Application) when is_atom(Application) ->
-    StopAs0 = applications_dependencies(Application),
-    StopAs1 = delete_all(kernel, StopAs0),
-    StopAs2 = delete_all(stdlib, StopAs1),
-    Apps = application:loaded_applications(),
-    {value, _, OtherApps0} = lists:keytake(Application, 1, Apps),
-    OtherAppsN = lists:foldl(fun(A, As) ->
-        {value, _, NextAs} = lists:keytake(A, 1, As),
-        NextAs
-    end, OtherApps0, StopAs2),
-    RequiredAs = lists:foldl(fun({A, _, _}, As) ->
-        sets:union(As, sets:from_list(applications_dependencies(A)))
-    end, sets:new(), OtherAppsN),
-    StopAsN = lists:foldl(fun(A, As) ->
-        delete_all(A, As)
-    end, StopAs2, sets:to_list(RequiredAs)),
-    ok = application_stopped(Application),
-    lists:foreach(fun(A) ->
-        ok = application_stopped(A)
-    end, lists:reverse(StopAsN)),
-    ok.
+-spec application_stop(Application :: atom()) ->
+    ok |
+    {error, any()}.
+
+application_stop(Application)
+    when is_atom(Application) ->
+    case applications_dependencies(Application) of
+        {ok, StopAs0} ->
+            case application_stopped(Application) of
+                ok ->
+                    StopAs1 = delete_all(kernel, StopAs0),
+                    StopAs2 = delete_all(stdlib, StopAs1),
+                    Apps = application:loaded_applications(),
+                    {value, _, OtherApps0} =
+                        lists:keytake(Application, 1, Apps),
+                    OtherAppsN = lists:foldl(fun(A, As) ->
+                        {value, _, NextAs} = lists:keytake(A, 1, As),
+                        NextAs
+                    end, OtherApps0, StopAs2),
+                    RequiredAs = application_stop_ignore(OtherAppsN),
+                    StopAsN = lists:foldl(fun(A, As) ->
+                        delete_all(A, As)
+                    end, StopAs2, RequiredAs),
+                    application_stop_dependencies(lists:reverse(StopAsN));
+                {error, _} = Error ->
+                    Error
+            end;
+        {error, _} = Error ->
+            Error
+    end.
 
 %%-------------------------------------------------------------------------
 %% @doc
@@ -132,16 +162,30 @@ application_stop(Application) when is_atom(Application) ->
 %% @end
 %%-------------------------------------------------------------------------
 
-script_start(FilePath) ->
+-spec script_start(FilePath :: string()) ->
+    {ok, atom()} |
+    {error, any()}.
+
+script_start(FilePath)
+    when is_list(FilePath) ->
     true = lists:suffix(".script", FilePath),
     % system name and version are ignored
     {ok, [{script, {_Name, _Vsn}, Instructions}]} = file:consult(FilePath),
     Dir = filename:dirname(FilePath),
     % expects the typical directory structure produced by reltool
     DirNames = filename:split(Dir),
-    Root = lists:sublist(DirNames, erlang:length(DirNames) - 2),
-    true = filelib:is_dir(filename:join(Root ++ ["lib"])),
-    script_instructions(Instructions, Root).
+    case erlang:length(DirNames) of
+        DirNamesLength when DirNamesLength > 2 ->
+            Root = lists:sublist(DirNames, DirNamesLength - 2),
+            case filelib:is_dir(filename:join(Root ++ ["lib"])) of
+                true ->
+                    script_instructions(Instructions, Root);
+                false ->
+                    {error, invalid_release_structure}
+            end;
+        _ ->
+            {error, invalid_release_directory}
+    end.
 
 %%%------------------------------------------------------------------------
 %%% Private functions
@@ -152,7 +196,9 @@ application_loaded(A) ->
          ok ->
              ok;
         {error, {already_loaded, A}} ->
-             ok
+             ok;
+        {error, _} = Error ->
+            Error
      end.
 
 application_started(A) ->
@@ -160,7 +206,9 @@ application_started(A) ->
         ok ->
             ok;
         {error, {already_started, A}} ->
-            ok
+            ok;
+        {error, _} = Error ->
+            Error
     end.
 
 application_stopped(A) ->
@@ -168,129 +216,229 @@ application_stopped(A) ->
         ok ->
             ok;
         {error, {not_started, A}} ->
-            ok
+            ok;
+        {error, _} = Error ->
+            Error
+    end.
+
+application_start_set_env([], _) ->
+    ok;
+application_start_set_env([{K, V} | L], Application) ->
+    try application:set_env(Application, K, V) of
+        ok ->
+            application_start_set_env(L, Application)
+    catch
+        exit:{timeout, _} ->
+            {error, application_controller_timeout}
+    end;
+application_start_set_env(_, _) ->
+    {error, invalid_application_env}.
+
+application_start_dependencies([]) ->
+    ok;
+application_start_dependencies([A | As]) ->
+    case application_started(A) of
+        ok ->
+            application_start_dependencies(As);
+        {error, _} = Error ->
+            Error
+    end.
+
+application_stop_ignore(L) ->
+    application_stop_ignore(sets:new(), L).
+
+application_stop_ignore(Required, []) ->
+    sets:to_list(Required);
+application_stop_ignore(Required, [{A, _, _} | L]) ->
+    case applications_dependencies(A) of
+        {ok, As} ->
+            application_stop_ignore(
+                sets:union(Required, sets:from_list(As)), L);
+        {error, _} = Error ->
+            Error
+    end.
+
+application_stop_dependencies([]) ->
+    ok;
+application_stop_dependencies([A | As]) ->
+    case application_stopped(A) of
+        ok ->
+            application_stop_dependencies(As);
+        {error, _} = Error ->
+            Error
     end.
 
 applications_dependencies(A) ->
-    {ok, As} = application:get_key(A, applications),
-    applications_dependencies(As, As).
+    case application:get_key(A, applications) of
+        undefined ->
+            {error, {undefined_dependencies, A}};
+        {ok, As} ->
+            applications_dependencies(As, As)
+    end.
 
 applications_dependencies([], As) ->
-    As;
+    {ok, As};
 applications_dependencies([A | Rest], As) ->
-    ok = application_loaded(A),
-    NewAs = case application:get_key(A, applications) of
-        {ok, []} ->
-            As;
-        {ok, NextAs} ->
-            applications_dependencies(NextAs, NextAs ++ As)
-    end,
-    applications_dependencies(Rest, NewAs).
+    case application_loaded(A) of
+        ok ->
+            case application:get_key(A, applications) of
+                undefined ->
+                    {error, {undefined_dependencies, A}};
+                {ok, []} ->
+                    applications_dependencies(Rest, As);
+                {ok, NextAs} ->
+                    case applications_dependencies(NextAs, NextAs ++ As) of
+                        {ok, NewAs} ->
+                            applications_dependencies(Rest, NewAs);
+                        {error, _} = Error ->
+                            Error
+                    end
+            end;
+        {error, _} = Error ->
+            Error
+    end.
 
 script_instructions(L, Root) ->
     Apps = application:loaded_applications(),
-    script_instructions(L, preload, Root, Apps).
+    script_instructions(L, preload, undefined, Root, Apps).
 
-script_instructions([], started, _, _) ->
-    ok;
-script_instructions([{progress, Progress} | L], _, Root, Apps) ->
-    script_instructions(L, Progress, Root, Apps);
+script_instructions([], started, Application, _, _) ->
+    {ok, Application};
+script_instructions([{progress, Progress} | L],
+                    _, Application, Root, Apps) ->
+    script_instructions(L, Progress, Application, Root, Apps);
 script_instructions([{preLoaded, _} | L],
-                    preload, Root, Apps) ->
-    script_instructions(L, preload, Root, Apps);
+                    preload, Application, Root, Apps) ->
+    script_instructions(L, preload, Application, Root, Apps);
 script_instructions([{kernel_load_completed} | L],
-                    preloaded, Root, Apps) ->
-    script_instructions(L, kernel_load_completed, Root, Apps);
+                    preloaded, Application, Root, Apps) ->
+    script_instructions(L, kernel_load_completed, Application, Root, Apps);
 script_instructions([{path, Paths} | L],
-                    preloaded, Root, Apps) ->
-    true = ensure_code_paths(Paths, Apps),
-    script_instructions(L, preloaded, Root, Apps);
+                    preloaded, Application, Root, Apps) ->
+    case ensure_code_paths(Paths, Apps) of
+        ok ->
+            script_instructions(L, preloaded, Application, Root, Apps);
+        {error, _} = Error ->
+            Error
+    end;
 script_instructions([{primLoad, Modules} | L],
-                    preloaded, Root, Apps) ->
-    true = lists:all(fun(M) ->
+                    preloaded, Application, Root, Apps) ->
+    Loaded = lists:all(fun(M) ->
         is_module_loaded(M) =:= true
     end, Modules),
-    script_instructions(L, preloaded, Root, Apps);
+    if
+        Loaded ->
+            script_instructions(L, preloaded, Application, Root, Apps);
+        true ->
+            {error, modules_not_preloaded}
+    end;
 script_instructions([{kernel_load_completed} | L],
-                    kernel_load_completed, Root, Apps) ->
-    script_instructions(L, kernel_load_completed, Root, Apps);
+                    kernel_load_completed, Application, Root, Apps) ->
+    script_instructions(L, kernel_load_completed, Application, Root, Apps);
 script_instructions([{primLoad, Modules} | L],
-                    kernel_load_completed, Root, Apps) ->
-    true = ensure_all_loaded(Modules),
-    script_instructions(L, kernel_load_completed, Root, Apps);
+                    kernel_load_completed, Application, Root, Apps) ->
+    case ensure_all_loaded(Modules) of
+        ok ->
+            script_instructions(L, kernel_load_completed,
+                                Application, Root, Apps);
+        {error, _} = Error ->
+            Error
+    end;
 script_instructions([{path, Paths} | L],
-                    kernel_load_completed, Root, Apps) ->
-    lists:foreach(fun(P) ->
-        ["$ROOT", "lib", NameVSN, "ebin"] = filename:split(P),
-        code:add_pathz(filename:join([Root, "lib", NameVSN, "ebin"]))
-    end, Paths),
-    script_instructions(L, kernel_load_completed, Root, Apps);
+                    kernel_load_completed, Application, Root, Apps) ->
+    case load_all_paths(Paths, Root) of
+        ok ->
+            script_instructions(L, kernel_load_completed,
+                                Application, Root, Apps);
+        {error, _} = Error ->
+            Error
+    end;
 script_instructions([{path, _} | L],
-                    modules_loaded, Root, Apps) ->
-    script_instructions(L, modules_loaded, Root, Apps);
+                    modules_loaded, Application, Root, Apps) ->
+    script_instructions(L, modules_loaded, Application, Root, Apps);
 script_instructions([{kernelProcess, _, _} | L],
-                    modules_loaded, Root, Apps) ->
-    script_instructions(L, modules_loaded, Root, Apps);
+                    modules_loaded, Application, Root, Apps) ->
+    script_instructions(L, modules_loaded, Application, Root, Apps);
 script_instructions([{apply, {application, load, [AppDescr]}} | L],
-                    init_kernel_started, Root, Apps) ->
+                    init_kernel_started, Application, Root, Apps) ->
     {application, A, [_ | _] = AppSpecKeys} = AppDescr,
     case lists:keyfind(A, 1, Apps) of
         {A, _, VSN} ->
             {vsn, RequestedVSN} = lists:keyfind(vsn, 1, AppSpecKeys),
-            true = VSN == RequestedVSN;
+            if
+                VSN == RequestedVSN ->
+                    script_instructions(L, init_kernel_started,
+                                        Application, Root, Apps);
+                true ->
+                    {error, {version_mismatch, A, RequestedVSN, VSN}}
+            end;
         false ->
-            ok = application:load(AppDescr)
-    end,
-    script_instructions(L, init_kernel_started, Root, Apps);
+            case application:load(AppDescr) of
+                ok ->
+                    script_instructions(L, init_kernel_started,
+                                        Application, Root, Apps);
+                {error, _} = Error ->
+                    Error
+            end
+    end;
 script_instructions([{apply, {application, start_boot, [A, permanent]}} | L],
-                    applications_loaded, Root, Apps)
+                    applications_loaded, Application, Root, Apps)
     when A =:= kernel; A =:= stdlib ->
     % if this code is being used, kernel and stdlib should have already
     % been started with the boot file that was used to start the Erlang VM
-    script_instructions(L, applications_loaded, Root, Apps);
+    script_instructions(L, applications_loaded, Application, Root, Apps);
 script_instructions([{apply, {application, start_boot, [A, permanent]}} | L],
-                    applications_loaded, Root, Apps) ->
-    ok = application_started(A),
-    script_instructions(L, applications_loaded, Root, Apps);
+                    applications_loaded, _, Root, Apps) ->
+    case application_started(A) of
+        ok ->
+            script_instructions(L, applications_loaded, A, Root, Apps);
+        {error, _} = Error ->
+            Error
+    end;
 script_instructions([{apply, {c, erlangrc, []}} | L],
-                    applications_loaded, Root, Apps) ->
-    script_instructions(L, applications_loaded, Root, Apps).
+                    applications_loaded, Application, Root, Apps) ->
+    script_instructions(L, applications_loaded, Application, Root, Apps).
 
 ensure_all_loaded([]) ->
-    true;
+    ok;
 ensure_all_loaded([Module | Modules]) ->
     case is_module_loaded(Module) of
         true ->
-            lists:all(fun(M) ->
+            Loaded = lists:all(fun(M) ->
                 is_module_loaded(M) =:= true
-            end, Modules);
+            end, Modules),
+            if
+                Loaded ->
+                    ok;
+                true ->
+                    {error, modules_partially_loaded}
+            end;
         false ->
-            Load = lists:all(fun(M) ->
+            NotLoaded = lists:all(fun(M) ->
                 is_module_loaded(M) =:= false
             end, Modules),
             if
-                Load ->
-                    lists:foreach(fun(M) ->
-                        {module, M} = code:load_file(M)
-                    end, [Module | Modules]),
-                    true;
+                NotLoaded ->
+                    load_all_modules([Module | Modules]);
                 true ->
-                    false
+                    {error, modules_partially_loaded}
             end
     end.
 
-ensure_code_paths(Paths, Apps) ->
-    lists:all(fun(P) ->
-        ["$ROOT", "lib", NameVSN, "ebin"] = filename:split(P),
-        {Name, VSN} = split_name_vsn(NameVSN),
-        Application = erlang:list_to_existing_atom(Name),
-        case lists:keyfind(Application, 1, Apps) of
-            {Application, _, VSN} ->
-                true;
-            _ ->
-                false
-        end
-    end, Paths).
+ensure_code_paths([], _) ->
+    ok;
+ensure_code_paths([P | Paths], Apps) ->
+    ["$ROOT", "lib", NameVSN, "ebin"] = filename:split(P),
+    {Name, VSN} = split_name_vsn(NameVSN),
+    Application = erlang:list_to_existing_atom(Name),
+    case lists:keyfind(Application, 1, Apps) of
+        {Application, _, VSN} ->
+            ensure_code_paths(Paths, Apps);
+        {Application, _, InvalidVSN} ->
+            {error, {version_mismatch, Application, VSN, InvalidVSN}};
+        false ->
+            {error, {not_loaded, Application, VSN}}
+    end.
 
 is_module_loaded(Module) when is_atom(Module) ->
     case code:is_loaded(Module) of
@@ -298,6 +446,28 @@ is_module_loaded(Module) when is_atom(Module) ->
             true;
         false ->
             false
+    end.
+
+load_all_modules([]) ->
+    ok;
+load_all_modules([Module | Modules]) ->
+    case code:load_file(Module) of
+        {module, Module} ->
+            load_all_modules(Modules);
+        {error, Reason} ->
+            {error, {Reason, Module}}
+    end.
+
+load_all_paths([], _) ->
+    ok;
+load_all_paths([P | Paths], Root) ->
+    ["$ROOT", "lib", NameVSN, "ebin"] = filename:split(P),
+    CodePath = filename:join(Root ++ ["lib", NameVSN, "ebin"]),
+    case code:add_pathz(CodePath) of
+        true ->
+            load_all_paths(Paths, Root);
+        {error, Reason} ->
+            {error, {Reason, CodePath}}
     end.
 
 split_name_vsn(NameVSN) ->
