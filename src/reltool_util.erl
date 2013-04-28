@@ -54,7 +54,11 @@
 
 -export([application_start/1,
          application_start/2,
+         application_start/3,
          application_stop/1,
+         application_running/1,
+         application_running/2,
+         application_loaded/1,
          script_start/1]).
 
 %%%------------------------------------------------------------------------
@@ -71,8 +75,9 @@
     ok |
     {error, any()}.
 
-application_start(Application) ->
-    application_start(Application, []).
+application_start(Application)
+    when is_atom(Application) ->
+    application_start(Application, [], 5000).
 
 %%-------------------------------------------------------------------------
 %% @doc
@@ -87,15 +92,31 @@ application_start(Application) ->
 
 application_start(Application, Env)
     when is_atom(Application), is_list(Env) ->
-    case application_loaded(Application) of
+    application_start(Application, Env, 5000).
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Start all the dependent applications manually with a specific configuration and timeout.===
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec application_start(Application :: atom(),
+                        Env :: list({atom(), any()}),
+                        Timeout :: pos_integer() | infinity) ->
+    ok |
+    {error, any()}.
+
+application_start(Application, Env, Timeout)
+    when is_atom(Application), is_list(Env) ->
+    case ensure_application_loaded(Application) of
         ok ->
-            case application_start_set_env(Env, Application) of
+            case application_start_set_env(Env, Application, Timeout) of
                 ok ->
                     case applications_dependencies(Application) of
                         {ok, As} ->
                             case application_start_dependencies(As) of
                                 ok ->
-                                    application_started(Application);
+                                    ensure_application_started(Application);
                                 {error, _} = Error ->
                                     Error
                             end;
@@ -123,7 +144,7 @@ application_stop(Application)
     when is_atom(Application) ->
     case applications_dependencies(Application) of
         {ok, StopAs0} ->
-            case application_stopped(Application) of
+            case ensure_application_stopped(Application) of
                 ok ->
                     StopAs1 = delete_all(kernel, StopAs0),
                     StopAs2 = delete_all(stdlib, StopAs1),
@@ -144,6 +165,65 @@ application_stop(Application)
             end;
         {error, _} = Error ->
             Error
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Check if an application is currently running.===
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec application_running(Application :: atom()) ->
+    {ok, {atom(), string()}} |
+    {error, any()}.
+
+application_running(Application)
+    when is_atom(Application) ->
+    application_running(Application, 5000).
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Check if an application is currently running with a timeout.===
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec application_running(Application :: atom(),
+                          Timeout :: pos_integer() | infinity) ->
+    {ok, {atom(), string()}} |
+    {error, any()}.
+
+application_running(Application, Timeout)
+    when is_atom(Application) ->
+    try application:which_applications(Timeout) of
+        Apps ->
+            case lists:keyfind(Application, 1, Apps) of
+                {Application, _, VSN} ->
+                    {ok, {Application, VSN}};
+                false ->
+                    {error, {not_found, Application}}
+            end
+    catch exit:{timeout, _} ->
+        {error, application_controller_timeout}
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Check if an application is currently loaded.===
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec application_loaded(Application :: atom()) ->
+    {ok, {atom(), string()}} |
+    {error, any()}.
+
+application_loaded(Application)
+    when is_atom(Application) ->
+    Apps = application:loaded_applications(),
+    case lists:keyfind(Application, 1, Apps) of
+        {Application, _, VSN} ->
+            {ok, {Application, VSN}};
+        false ->
+            {error, {not_found, Application}}
     end.
 
 %%-------------------------------------------------------------------------
@@ -191,7 +271,7 @@ script_start(FilePath)
 %%% Private functions
 %%%------------------------------------------------------------------------
 
-application_loaded(A) ->
+ensure_application_loaded(A) ->
     case application:load(A) of
          ok ->
              ok;
@@ -201,7 +281,7 @@ application_loaded(A) ->
             Error
      end.
 
-application_started(A) ->
+ensure_application_started(A) ->
     case application:start(A, temporary) of
         ok ->
             ok;
@@ -211,7 +291,7 @@ application_started(A) ->
             Error
     end.
 
-application_stopped(A) ->
+ensure_application_stopped(A) ->
     case application:stop(A) of
         ok ->
             ok;
@@ -221,23 +301,23 @@ application_stopped(A) ->
             Error
     end.
 
-application_start_set_env([], _) ->
+application_start_set_env([], _, _) ->
     ok;
-application_start_set_env([{K, V} | L], Application) ->
-    try application:set_env(Application, K, V) of
+application_start_set_env([{K, V} | L], Application, Timeout) ->
+    try application:set_env(Application, K, V, Timeout) of
         ok ->
-            application_start_set_env(L, Application)
+            application_start_set_env(L, Application, Timeout)
     catch
         exit:{timeout, _} ->
             {error, application_controller_timeout}
     end;
-application_start_set_env(_, _) ->
+application_start_set_env(_, _, _) ->
     {error, invalid_application_env}.
 
 application_start_dependencies([]) ->
     ok;
 application_start_dependencies([A | As]) ->
-    case application_started(A) of
+    case ensure_application_started(A) of
         ok ->
             application_start_dependencies(As);
         {error, _} = Error ->
@@ -261,7 +341,7 @@ application_stop_ignore(Required, [{A, _, _} | L]) ->
 application_stop_dependencies([]) ->
     ok;
 application_stop_dependencies([A | As]) ->
-    case application_stopped(A) of
+    case ensure_application_stopped(A) of
         ok ->
             application_stop_dependencies(As);
         {error, _} = Error ->
@@ -279,7 +359,7 @@ applications_dependencies(A) ->
 applications_dependencies([], As) ->
     {ok, As};
 applications_dependencies([A | Rest], As) ->
-    case application_loaded(A) of
+    case ensure_application_loaded(A) of
         ok ->
             case application:get_key(A, applications) of
                 undefined ->
@@ -389,7 +469,7 @@ script_instructions([{apply, {application, start_boot, [A, permanent]}} | L],
     script_instructions(L, applications_loaded, Application, Root, Apps);
 script_instructions([{apply, {application, start_boot, [A, permanent]}} | L],
                     applications_loaded, _, Root, Apps) ->
-    case application_started(A) of
+    case ensure_application_started(A) of
         ok ->
             script_instructions(L, applications_loaded, A, Root, Apps);
         {error, _} = Error ->
