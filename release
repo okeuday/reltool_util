@@ -43,6 +43,8 @@
 
 -author('mjtruog [at] gmail (dot) com').
 
+-mode(compile).
+
 main(_) ->
     {ok,
      [{sys, _} = RelToolConfig,
