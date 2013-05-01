@@ -149,17 +149,18 @@ application_stop(Application)
                     StopAs1 = delete_all(kernel, StopAs0),
                     StopAs2 = delete_all(stdlib, StopAs1),
                     Apps = application:loaded_applications(),
-                    {value, _, OtherApps0} =
-                        lists:keytake(Application, 1, Apps),
-                    OtherAppsN = lists:foldl(fun(A, As) ->
-                        {value, _, NextAs} = lists:keytake(A, 1, As),
-                        NextAs
-                    end, OtherApps0, StopAs2),
-                    RequiredAs = application_stop_ignore(OtherAppsN),
-                    StopAsN = lists:foldl(fun(A, As) ->
-                        delete_all(A, As)
-                    end, StopAs2, RequiredAs),
-                    application_stop_dependencies(lists:reverse(StopAsN));
+                    {value, _, OtherApps0} = lists:keytake(Application,
+                                                           1, Apps),
+                    case application_stop_external(StopAs2, OtherApps0) of
+                        {ok, OtherAppsN} ->
+                            RequiredAs = application_stop_ignore(OtherAppsN),
+                            StopAsN = lists:reverse(lists:foldl(fun(A, As) ->
+                                delete_all(A, As)
+                            end, StopAs2, RequiredAs)),
+                            application_stop_dependencies(StopAsN);
+                        {error, _} = Error ->
+                            Error
+                    end;
                 {error, _} = Error ->
                     Error
             end;
@@ -322,6 +323,16 @@ application_start_dependencies([A | As]) ->
             application_start_dependencies(As);
         {error, _} = Error ->
             Error
+    end.
+
+application_stop_external([], Apps) ->
+    {ok, Apps};
+application_stop_external([A | As], Apps) ->
+    case lists:keytake(A, 1, Apps) of
+        false ->
+            {error, {not_started, A}};
+        {value, _, NextApps} ->
+            application_stop_external(As, NextApps)
     end.
 
 application_stop_ignore(L) ->
