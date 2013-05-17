@@ -51,7 +51,8 @@
             prefix_ignore = undefined,
             prefix_scope = undefined,
             directory_suffix_old = undefined,
-            help = false
+            help = false,
+            undo = false
         }).
 
 -record(state,
@@ -62,22 +63,28 @@
         }).
 
 main(Arguments) ->
-    #config{directories_in = DirectoriesIn,
-            prefix_ignore = PrefixIgnore,
-            prefix_scope = PrefixScope,
-            directory_suffix_old = DirectorySuffixOld,
-            help = Help} = parse_command_line(Arguments),
-    if
-        Help =:= true ->
-            help(),
-            erlang:halt(1);
-        true ->
-            ok
-    end,
-    true = (DirectoriesIn /= []),
-    true = is_list(PrefixIgnore),
-    true = is_list(PrefixScope),
-    true = is_list(DirectorySuffixOld),
+    handle_operation(parse_command_line(Arguments)).
+
+handle_operation(#config{help = true}) ->
+    help(),
+    erlang:halt(1);
+handle_operation(#config{directories_in = DirectoriesIn,
+                         prefix_ignore = PrefixIgnore,
+                         prefix_scope = PrefixScope,
+                         directory_suffix_old = DirectorySuffixOld,
+                         undo = true})
+    when DirectoriesIn /= [], is_list(PrefixIgnore), is_list(PrefixScope),
+         is_list(DirectorySuffixOld) ->
+    ok = undo_mv_old(DirectoriesIn, DirectorySuffixOld),
+    ok = undo_rm_scope(DirectoriesIn, PrefixScope),
+    erlang:halt(0);
+handle_operation(#config{directories_in = DirectoriesIn,
+                         prefix_ignore = PrefixIgnore,
+                         prefix_scope = PrefixScope,
+                         directory_suffix_old = DirectorySuffixOld,
+                         undo = false})
+    when DirectoriesIn /= [], is_list(PrefixIgnore), is_list(PrefixScope),
+         is_list(DirectorySuffixOld) ->
     #state{files_source = FilesSource,
            files_applications = FilesApplications,
            name_conversions = NameConversions} = files_find(DirectoriesIn,
@@ -102,6 +109,50 @@ main(Arguments) ->
                            orddict:from_list(NameConversions)),
     ok = files_move_old(FilesApplications, DirectorySuffixOld),
     erlang:halt(0).
+
+undo_mv_old([], _) ->
+    ok;
+undo_mv_old([Directory | DirectoriesIn], DirectorySuffixOld) ->
+    true = filelib:is_dir(Directory),
+    OldDirectory = Directory ++ DirectorySuffixOld,
+    case filelib:is_dir(OldDirectory) of
+        true ->
+            {ok, FilePaths} = file:list_dir_all(OldDirectory),
+            ok = undo_mv_old_dir(FilePaths, OldDirectory, Directory),
+            ok = file:del_dir(OldDirectory),
+            ok;
+        false ->
+            ok
+    end,
+    undo_mv_old(DirectoriesIn, DirectorySuffixOld).
+
+undo_mv_old_dir([], _, _) ->
+    ok;
+undo_mv_old_dir([FilePath | FilePaths], OldDirectory, Directory) ->
+    OldFilePath = filename:join(OldDirectory, FilePath),
+    NewFilePath = filename:join(Directory, FilePath),
+    ok = file:rename(OldFilePath, NewFilePath),
+    undo_mv_old_dir(FilePaths, OldDirectory, Directory).
+
+undo_rm_scope([], _) ->
+    ok;
+undo_rm_scope([Directory | DirectoriesIn], PrefixScope) ->
+    true = filelib:is_dir(Directory),
+    {ok, FilePaths} = file:list_dir_all(Directory),
+    ok = undo_rm_scope_dir(FilePaths, Directory, PrefixScope),
+    undo_rm_scope(DirectoriesIn, PrefixScope).
+
+undo_rm_scope_dir([], _, _) ->
+    ok;
+undo_rm_scope_dir([FilePath | FilePaths], Directory, PrefixScope) ->
+    case lists:prefix(PrefixScope, FilePath) of
+        true ->
+            FullFilePath = filename:join(Directory, FilePath),
+            ok = file:delete(FullFilePath);
+        false ->
+            ok
+    end,
+    undo_rm_scope_dir(FilePaths, Directory, PrefixScope).
 
 files_find(DirectoriesIn,
            PrefixIgnore, PrefixScope) ->
@@ -297,7 +348,8 @@ help() ->
 "    -d DIR           Source directory of an application for input files~n"
 "    -s SCOPE         Scope to apply~n"
 "    -i SCOPE         Scope to ignore~n"
-"    -b SUFFIX        Set the subdirectory name suffix for storing old files~n"
+"    -b SUFFIX        Set the subdirectory name suffix for file backups~n"
+"    -u               Undo the scope operation~n"
 "    -h               Display command line options (as shown here)~n"
 "~n"
 " Note: When processed files are moved to the application source directory~n"
@@ -343,6 +395,9 @@ parse_command_line(["-s", PrefixScope | Arguments],
 parse_command_line(["-b", DirectorySuffixOld | Arguments],
                    #config{directory_suffix_old = undefined} = Config) ->
     NewConfig = Config#config{directory_suffix_old = DirectorySuffixOld},
+    parse_command_line(Arguments, NewConfig);
+parse_command_line(["-u" | Arguments], Config) ->
+    NewConfig = Config#config{undo = true},
     parse_command_line(Arguments, NewConfig);
 parse_command_line(["-h" | Arguments], Config) ->
     NewConfig = Config#config{help = true},
