@@ -51,6 +51,7 @@
             prefix_ignore = undefined,
             prefix_scope = undefined,
             directory_suffix_old = undefined,
+            include_directories = [],
             help = false,
             undo = false
         }).
@@ -59,6 +60,7 @@
         {
             files_source = [],
             files_applications = [],
+            include_directories = [],
             name_conversions = []
         }).
 
@@ -82,11 +84,13 @@ handle_operation(#config{directories_in = DirectoriesIn,
                          prefix_ignore = PrefixIgnore,
                          prefix_scope = PrefixScope,
                          directory_suffix_old = DirectorySuffixOld,
+                         include_directories = IncludeDirectories0,
                          undo = false})
     when DirectoriesIn /= [], is_list(PrefixIgnore), is_list(PrefixScope),
          is_list(DirectorySuffixOld) ->
     #state{files_source = FilesSource,
            files_applications = FilesApplications,
+           include_directories = IncludeDirectories1,
            name_conversions = NameConversions} = files_find(DirectoriesIn,
                                                             PrefixIgnore,
                                                             PrefixScope),
@@ -101,9 +105,12 @@ handle_operation(#config{directories_in = DirectoriesIn,
 %io:format("~p~n", [    #state{files_source = FilesSource,
 %               files_applications = FilesApplications,
 %                          name_conversions = NameConversions}]),
-    _NewSourceFilePaths = igor:rename(FilesSource, NameConversions,
-                                      [{stubs, false},
-                                       {backups, false}]),
+    _Output = igor:rename(FilesSource, NameConversions,
+                          [{stubs, false},
+                           {backups, false},
+                           {preprocess, true},
+                           {includes, IncludeDirectories0 ++
+                                      IncludeDirectories1}]),
     ok = files_move_old(FilesSource, DirectorySuffixOld),
     ok = files_rename_apps(FilesApplications,
                            orddict:from_list(NameConversions)),
@@ -162,17 +169,35 @@ files_find(DirectoriesIn,
 files_find([], _, _,
            #state{files_source = FilesSource,
                   files_applications = FilesApplications,
+                  include_directories = IncludeDirectories,
                   name_conversions = NameConversions} = State) ->
     State#state{files_source = lists:reverse(FilesSource),
                 files_applications = lists:reverse(FilesApplications),
+                include_directories = lists:reverse(IncludeDirectories),
                 name_conversions = lists:reverse(NameConversions)};
            
-files_find([Directory | DirectoriesIn], PrefixIgnore, PrefixScope, State) ->
+files_find([Directory | DirectoriesIn], PrefixIgnore, PrefixScope,
+           #state{include_directories = IncludeDirectories} = State) ->
     true = filelib:is_dir(Directory),
+    NewIncludeDirectories = case lists:suffix("/src", Directory) of
+        true ->
+            [$c, $r, $s, $/ | DirectoryPrefix] = lists:reverse(Directory),
+            IncludeDirectory = filename:join(lists:reverse(DirectoryPrefix),
+                                             "include"),
+            case filelib:is_dir(IncludeDirectory) of
+                true ->
+                    [IncludeDirectory | IncludeDirectories];
+                false ->
+                    IncludeDirectories
+            end;
+        false ->
+            IncludeDirectories
+    end,
     {ok, FilePaths} = file:list_dir_all(Directory),
-    NextState = files_find_dir(FilePaths, Directory,
-                               PrefixIgnore, PrefixScope, State),
-    files_find(DirectoriesIn, PrefixIgnore, PrefixScope, NextState).
+    NextState = State#state{include_directories = NewIncludeDirectories},
+    NewState = files_find_dir(FilePaths, Directory,
+                              PrefixIgnore, PrefixScope, NextState),
+    files_find(DirectoriesIn, PrefixIgnore, PrefixScope, NewState).
 
 files_find_dir([], _, _, _, State) ->
     State;
@@ -349,6 +374,7 @@ help() ->
 "    -s SCOPE         Scope to apply~n"
 "    -i SCOPE         Scope to ignore~n"
 "    -b SUFFIX        Set the subdirectory name suffix for file backups~n"
+"    -c DIR           Add a directory to the include path~n"
 "    -u               Undo the scope operation~n"
 "    -h               Display command line options (as shown here)~n"
 "~n"
@@ -395,6 +421,10 @@ parse_command_line(["-s", PrefixScope | Arguments],
 parse_command_line(["-b", DirectorySuffixOld | Arguments],
                    #config{directory_suffix_old = undefined} = Config) ->
     NewConfig = Config#config{directory_suffix_old = DirectorySuffixOld},
+    parse_command_line(Arguments, NewConfig);
+parse_command_line(["-c", Directory | Arguments],
+                   #config{include_directories = Directories} = Config) ->
+    NewConfig = Config#config{include_directories = [Directory | Directories]},
     parse_command_line(Arguments, NewConfig);
 parse_command_line(["-u" | Arguments], Config) ->
     NewConfig = Config#config{undo = true},
