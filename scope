@@ -59,17 +59,20 @@
 -record(state,
         {
             files_source = [],
+            files_include = [],
             files_applications = [],
             include_directories = [],
             name_conversions = []
         }).
+
+%-define(USE_IGOR, undefined).
 
 main(Arguments) ->
     handle_operation(parse_command_line(Arguments)).
 
 handle_operation(#config{help = true}) ->
     help(),
-    erlang:halt(1);
+    exit_code(1);
 handle_operation(#config{directories_in = DirectoriesIn,
                          prefix_ignore = PrefixIgnore,
                          prefix_scope = PrefixScope,
@@ -79,7 +82,7 @@ handle_operation(#config{directories_in = DirectoriesIn,
          is_list(DirectorySuffixOld) ->
     ok = undo_mv_old(DirectoriesIn, DirectorySuffixOld),
     ok = undo_rm_scope(DirectoriesIn, PrefixScope),
-    erlang:halt(0);
+    exit_code(0);
 handle_operation(#config{directories_in = DirectoriesIn,
                          prefix_ignore = PrefixIgnore,
                          prefix_scope = PrefixScope,
@@ -89,6 +92,7 @@ handle_operation(#config{directories_in = DirectoriesIn,
     when DirectoriesIn /= [], is_list(PrefixIgnore), is_list(PrefixScope),
          is_list(DirectorySuffixOld) ->
     #state{files_source = FilesSource,
+           files_include = FilesInclude,
            files_applications = FilesApplications,
            include_directories = IncludeDirectories1,
            name_conversions = NameConversions} = files_find(DirectoriesIn,
@@ -97,7 +101,7 @@ handle_operation(#config{directories_in = DirectoriesIn,
     if
         NameConversions == [] ->
             io:format("no files to process!~n", []),
-            erlang:halt(1);
+            exit_code(1);
         true ->
             ok
     end,
@@ -105,22 +109,41 @@ handle_operation(#config{directories_in = DirectoriesIn,
 %io:format("~p~n", [    #state{files_source = FilesSource,
 %               files_applications = FilesApplications,
 %                          name_conversions = NameConversions}]),
-    _Output = igor:rename(FilesSource, NameConversions,
-                          [{stubs, false},
-                           {backups, false},
-                           {preprocess, true},
-                           {includes, IncludeDirectories0 ++
-                                      IncludeDirectories1}]),
-    ok = files_move_old(FilesSource, DirectorySuffixOld),
-    ok = files_rename_apps(FilesApplications,
-                           orddict:from_list(NameConversions)),
+    % n.b., since only a prefix is added it is always true that no
+    % resulting names in the NameConversions list are also source names
+    % (so no cycles within the lookup)
+    NameLookup = orddict:from_list(NameConversions),
+    rename(FilesSource, FilesInclude,
+           IncludeDirectories0 ++ IncludeDirectories1,
+           NameConversions, NameLookup, DirectorySuffixOld),
+    ok = files_rename_apps(FilesApplications, NameLookup),
     ok = files_move_old(FilesApplications, DirectorySuffixOld),
-    erlang:halt(0).
+    exit_code(0).
 
 undo_mv_old([], _) ->
     ok;
 undo_mv_old([Directory | DirectoriesIn], DirectorySuffixOld) ->
     true = filelib:is_dir(Directory),
+    case lists:suffix("/src", Directory) of
+        true ->
+            [$c, $r, $s, $/ | DirectoryPrefix] = lists:reverse(Directory),
+            IncludeDirectory = filename:join(lists:reverse(DirectoryPrefix),
+                                             "include"),
+            OldIncludeDirectory = IncludeDirectory ++ DirectorySuffixOld,
+            case filelib:is_dir(OldIncludeDirectory) of
+                true ->
+                    {ok, IncludeFilePaths} =
+                        file:list_dir_all(OldIncludeDirectory),
+                    ok = undo_mv_old_dir(IncludeFilePaths,
+                                         OldIncludeDirectory,
+                                         IncludeDirectory),
+                    ok = file:del_dir(OldIncludeDirectory);
+                false ->
+                    ok
+            end;
+        false ->
+            ok
+    end,
     OldDirectory = Directory ++ DirectorySuffixOld,
     case filelib:is_dir(OldDirectory) of
         true ->
@@ -168,10 +191,12 @@ files_find(DirectoriesIn,
     
 files_find([], _, _,
            #state{files_source = FilesSource,
+                  files_include = FilesInclude,
                   files_applications = FilesApplications,
                   include_directories = IncludeDirectories,
                   name_conversions = NameConversions} = State) ->
     State#state{files_source = lists:reverse(FilesSource),
+                files_include = lists:reverse(FilesInclude),
                 files_applications = lists:reverse(FilesApplications),
                 include_directories = lists:reverse(IncludeDirectories),
                 name_conversions = lists:reverse(NameConversions)};
@@ -179,32 +204,77 @@ files_find([], _, _,
 files_find([Directory | DirectoriesIn], PrefixIgnore, PrefixScope,
            #state{include_directories = IncludeDirectories} = State) ->
     true = filelib:is_dir(Directory),
-    NewIncludeDirectories = case lists:suffix("/src", Directory) of
+    NextState = case lists:suffix("/src", Directory) of
         true ->
             [$c, $r, $s, $/ | DirectoryPrefix] = lists:reverse(Directory),
             IncludeDirectory = filename:join(lists:reverse(DirectoryPrefix),
                                              "include"),
             case filelib:is_dir(IncludeDirectory) of
                 true ->
-                    [IncludeDirectory | IncludeDirectories];
+                    {ok, IncludeFilePaths} =
+                        file:list_dir_all(IncludeDirectory),
+                    files_find_dir_include(IncludeFilePaths, IncludeDirectory,
+                                           PrefixIgnore, PrefixScope,
+                                           State#state{
+                                               include_directories =
+                                                   [IncludeDirectory |
+                                                    IncludeDirectories]});
                 false ->
-                    IncludeDirectories
+                    State
             end;
         false ->
-            IncludeDirectories
+            State
     end,
     {ok, FilePaths} = file:list_dir_all(Directory),
-    NextState = State#state{include_directories = NewIncludeDirectories},
-    NewState = files_find_dir(FilePaths, Directory,
-                              PrefixIgnore, PrefixScope, NextState),
-    files_find(DirectoriesIn, PrefixIgnore, PrefixScope, NewState).
+    files_find(DirectoriesIn, PrefixIgnore, PrefixScope,
+               files_find_dir_src(FilePaths, Directory,
+                                  PrefixIgnore, PrefixScope, NextState)).
 
-files_find_dir([], _, _, _, State) ->
+files_find_dir_include([], _, _, _, State) ->
     State;
-files_find_dir([FilePath | FilePaths], Directory, PrefixIgnore, PrefixScope,
-               #state{files_source = FilesSource,
-                      files_applications = FilesApplications,
-                      name_conversions = NameConversions} = State) ->
+files_find_dir_include([FilePath | FilePaths], Directory,
+                       PrefixIgnore, PrefixScope,
+                       #state{files_include = FilesInclude,
+                              name_conversions = NameConversions} = State) ->
+    FileExtension = filename:extension(FilePath),
+    FileName = filename:basename(FilePath, FileExtension),
+    NewState = if
+        FileExtension == ".hrl" ->
+            case lists:prefix(PrefixIgnore, FileName) of
+                true ->
+                    State;
+                false ->
+                    case lists:prefix(PrefixScope, FileName) of
+                        true ->
+                            State;
+                        false ->
+                            FullFilePath = filename:join(Directory, FilePath),
+                            Convert = {erlang:list_to_atom(FileName),
+                                       erlang:list_to_atom(PrefixScope ++
+                                                           FileName)},
+                            State#state{
+                                files_include = [FullFilePath |
+                                                 FilesInclude],
+                                name_conversions =
+                                    lists:umerge(NameConversions,
+                                                 [Convert])}
+                    end
+            end;
+        true ->
+            State
+    end,
+    files_find_dir_include(FilePaths, Directory,
+                           PrefixIgnore, PrefixScope,
+                           NewState).
+
+files_find_dir_src([], _, _, _, State) ->
+    State;
+files_find_dir_src([FilePath | FilePaths], Directory,
+                   PrefixIgnore, PrefixScope,
+                   #state{files_source = FilesSource,
+                          files_include = FilesInclude,
+                          files_applications = FilesApplications,
+                          name_conversions = NameConversions} = State) ->
     FileExtension = filename:extension(FilePath),
     FileName = filename:basename(FilePath, FileExtension),
     ApplicationFile = if
@@ -219,6 +289,8 @@ files_find_dir([FilePath | FilePaths], Directory, PrefixIgnore, PrefixScope,
         ApplicationFile ->
             false;
         FileExtension == ".erl" ->
+            true;
+        FileExtension == ".hrl" ->
             true;
         true ->
             false
@@ -263,17 +335,30 @@ files_find_dir([FilePath | FilePaths], Directory, PrefixIgnore, PrefixScope,
                             Convert = {erlang:list_to_atom(FileName),
                                        erlang:list_to_atom(PrefixScope ++
                                                            FileName)},
-                            State#state{
-                                files_source = [FullFilePath |
-                                                FilesSource],
-                                name_conversions =
-                                    lists:umerge(NameConversions, [Convert])}
+                            if
+                                FileExtension == ".erl" ->
+                                    State#state{
+                                        files_source = [FullFilePath |
+                                                        FilesSource],
+                                        name_conversions =
+                                            lists:umerge(NameConversions,
+                                                         [Convert])};
+                                FileExtension == ".hrl" ->
+                                    State#state{
+                                        files_include = [FullFilePath |
+                                                         FilesInclude],
+                                        name_conversions =
+                                            lists:umerge(NameConversions,
+                                                         [Convert])}
+                            end
                     end
             end;
         true ->
             State
     end,
-    files_find_dir(FilePaths, Directory, PrefixIgnore, PrefixScope, NextState).
+    files_find_dir_src(FilePaths, Directory,
+                       PrefixIgnore, PrefixScope,
+                       NextState).
 
 files_rename_apps([], _) ->
     ok;
@@ -286,6 +371,7 @@ files_rename_apps([FilePath | FileApplications], NameLookup) ->
         FileExtension == ".src" ->
             filename:basename(FileName, ".app")
     end,
+    true = filelib:is_regular(FilePath),
     {ok, [{application,
            ApplicationName,
            ApplicationEnv0}]} = file:consult(FilePath),
@@ -364,7 +450,68 @@ files_move_old([FilePath | FilePaths], DirectorySuffixOld) ->
     end,
     NewFilePath = filename:join(NewDirectory, filename:basename(FilePath)),
     ok = file:rename(FilePath, NewFilePath),
+    true = filelib:is_regular(NewFilePath),
     files_move_old(FilePaths, DirectorySuffixOld).
+
+-ifdef(USE_IGOR).
+rename(FilesSource, FilesInclude, IncludeDirectories,
+       NameConversions, NameLookup, DirectorySuffixOld) ->
+    rename_igor(FilesSource, FilesInclude, IncludeDirectories,
+                NameConversions, NameLookup, DirectorySuffixOld).
+
+rename_igor(FilesSource, _FilesInclude, IncludeDirectories,
+            NameConversions, _NameLookup, DirectorySuffixOld) ->
+    _Output = igor:rename(FilesSource, NameConversions,
+                          [{stubs, false},
+                           {backups, false},
+                           {preprocess, true},
+                           {includes, IncludeDirectories}]),
+    ok = files_move_old(FilesSource, DirectorySuffixOld),
+    ok.
+-else.
+rename(FilesSource, FilesInclude, IncludeDirectories,
+       NameConversions, NameLookup, DirectorySuffixOld) ->
+    rename_regex(FilesSource, FilesInclude, IncludeDirectories,
+                 NameConversions, NameLookup, DirectorySuffixOld).
+
+rename_regex(FilesSource, FilesInclude, _IncludeDirectories,
+             NameConversions, NameLookup, DirectorySuffixOld) ->
+    OrderedNameConversions = lists:sort(lists:map(fun({Name1, Name2}) ->
+        {erlang:length(erlang:atom_to_list(Name1)), Name1, Name2}
+    end, NameConversions)),
+    % make sure regexes will be processed with the longest names first
+    % to avoid erroneous replacements
+    Regexes = lists:map(fun({_, Name1, Name2}) ->
+        {ok, R} = re:compile("([^a-z0-9_])" ++
+                             erlang:atom_to_list(Name1) ++
+                             "([^a-z0-9_])"),
+        fun (S) ->
+            re:replace(S, R,
+                       "\\1" ++ erlang:atom_to_list(Name2) ++ "\\2",
+                       [global, {return, list}])
+        end
+    end, lists:reverse(OrderedNameConversions)),
+    Fconversion = fun(FileExtension) -> fun(FilePath) ->
+        {ok, FileContents} = file:read_file(FilePath),
+        NewFileContents = reduce(Regexes, erlang:binary_to_list(FileContents)),
+        Name1 = filename:basename(FilePath, FileExtension),
+        Name2 = erlang:atom_to_list(orddict:fetch(erlang:list_to_atom(Name1),
+                                                  NameLookup)),
+        NewFilePath = filename:join(filename:dirname(FilePath),
+                                    Name2 ++ FileExtension),
+        ok = file:write_file(NewFilePath, NewFileContents)
+    end end,
+    lists:foreach(Fconversion(".erl"), FilesSource),
+    lists:foreach(Fconversion(".hrl"), FilesInclude),
+    ok = files_move_old(FilesSource, DirectorySuffixOld),
+    ok = files_move_old(FilesInclude, DirectorySuffixOld),
+    ok.
+
+reduce([], V) ->
+    V;
+reduce([H | T], V) ->
+    reduce(T, H(V)).
+-endif.
 
 help() ->
     io:format(
@@ -434,4 +581,7 @@ parse_command_line(["-h" | Arguments], Config) ->
     parse_command_line(Arguments, NewConfig);
 parse_command_line([Unknown | _], _) ->
     erlang:exit({badarg, {command_line, Unknown}}).
+
+exit_code(ExitCode) ->
+    erlang:halt(ExitCode, [{flush, true}]).
 
