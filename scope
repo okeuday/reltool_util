@@ -1,7 +1,7 @@
 #!/usr/bin/env escript
 %%!
-%%% -*- coding: utf-8; Mode: erlang; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*-
-%%% ex: set softtabstop=4 tabstop=4 shiftwidth=4 expandtab fileencoding=utf-8:
+%-*-Mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
+% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
 %%%------------------------------------------------------------------------
 %%% BSD LICENSE
@@ -471,14 +471,18 @@ files_rename_apps([FilePath | FilesApplications], NameLookup) ->
            ApplicationNameFile,
            ApplicationEnv0}]} = file:consult(FilePath),
     true = (ApplicationNameFile =:= ApplicationName),
-    {value,
-     {modules, ModulesList},
-     ApplicationEnv1} = lists:keytake(modules, 1, ApplicationEnv0),
-    NewModulesList = lists:map(fun(M) ->
-        % all source file directories must have been provided
-        orddict:fetch(M, NameLookup)
-    end, ModulesList),
-    ApplicationEnv2 = [{modules, NewModulesList} | ApplicationEnv1],
+    ApplicationEnv2 = case lists:keytake(modules, 1, ApplicationEnv0) of
+        {value,
+         {modules, ModulesList},
+         ApplicationEnv1} ->
+            NewModulesList = lists:map(fun(M) ->
+                % all source file directories must have been provided
+                orddict:fetch(M, NameLookup)
+            end, ModulesList),
+            [{modules, NewModulesList} | ApplicationEnv1];
+        false ->
+            ApplicationEnv0
+    end,
     ApplicationEnv4 = case lists:keytake(mod, 1, ApplicationEnv2) of
         false ->
             ApplicationEnv2;
