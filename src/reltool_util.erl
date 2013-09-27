@@ -369,6 +369,9 @@ application_modules(Application) ->
 %%-------------------------------------------------------------------------
 %% @doc
 %% ===Retrieve a list of application modules with filter options.===
+%% Options can contain {behavior, ModuleName} to list all the modules
+%% that use a specific behaviour (the information will not be present if
+%% the beam file was stripped).
 %% @end
 %%-------------------------------------------------------------------------
 
