@@ -63,12 +63,12 @@ main(_) ->
     exit_code(0).
 
 shell(Command, Arguments) ->
-    CommandSuffix = " && echo 0 || echo 1",
+    CommandSuffix = " && printf 0 || printf 1",
     case lists:reverse(os:cmd(lists:flatten(
         io_lib:format(Command ++ CommandSuffix, Arguments)))) of
-        [_, $0 | _] ->
+        [$0 | _] ->
             ok;
-        [_, $1 | _] ->
+        [$1 | _] ->
             io:format("\"~s\" failed!~n", [io_lib:format(Command, Arguments)]),
             error
     end.
