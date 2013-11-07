@@ -881,6 +881,15 @@ applications_dependencies(A) ->
             case application:get_key(A, applications) of
                 undefined ->
                     {error, {undefined_dependencies, A}};
+                {ok, As} when A =:= common_test ->
+                    % XXX avoid error in Erlang/OTP until ct gets fixed
+                    AsCT = case lists:member(sasl, As) of
+                        true ->
+                            As;
+                        false ->
+                            [sasl | As]
+                    end,
+                    applications_dependencies(AsCT, AsCT);
                 {ok, As} ->
                     applications_dependencies(As, As)
             end;
