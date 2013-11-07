@@ -883,6 +883,7 @@ applications_dependencies(A) ->
                     {error, {undefined_dependencies, A}};
                 {ok, As} when A =:= common_test ->
                     % XXX avoid error in Erlang/OTP until ct gets fixed
+                    % (necessary for Erlang =< R16B02)
                     AsCT = case lists:member(sasl, As) of
                         true ->
                             As;
