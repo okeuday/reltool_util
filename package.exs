@@ -10,6 +10,7 @@ defmodule ReltoolUtil.Mixfile do
   end
 
   defp deps do
+    []
   end
 
   defp description do
