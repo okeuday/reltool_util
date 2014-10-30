@@ -3,7 +3,7 @@ defmodule ReltoolUtil.Mixfile do
 
   def project do
     [app: :reltool_util,
-     version: "1.3.3",
+     version: "1.4.0-rc.4",
      description: description,
      package: package,
      deps: deps]
