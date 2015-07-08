@@ -10,7 +10,7 @@
 %%%
 %%% BSD LICENSE
 %%% 
-%%% Copyright (c) 2013-2014, Michael Truog <mjtruog at gmail dot com>
+%%% Copyright (c) 2013-2015, Michael Truog <mjtruog at gmail dot com>
 %%% All rights reserved.
 %%% 
 %%% Redistribution and use in source and binary forms, with or without
@@ -45,8 +45,8 @@
 %%% DAMAGE.
 %%%
 %%% @author Michael Truog <mjtruog [at] gmail (dot) com>
-%%% @copyright 2013-2014 Michael Truog
-%%% @version 1.3.3 {@date} {@time}
+%%% @copyright 2013-2015 Michael Truog
+%%% @version 1.5.1 {@date} {@time}
 %%%------------------------------------------------------------------------
 
 -module(reltool_util).
@@ -73,6 +73,7 @@
          ensure_application_loaded/1,
          ensure_application_started/1,
          ensure_application_stopped/1,
+         config_load/1,
          module_loaded/1,
          is_module_loaded/1,
          is_module_loaded/2,
@@ -562,6 +563,24 @@ ensure_application_stopped(Application) ->
         {error, _} = Error ->
             Error
     end.
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Load a config file from a release.===
+%% All applications with configuration values are loaded if they are not
+%% already loaded.
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec config_load(FilePath :: string()) ->
+    {ok, list(atom())} |
+    {error, any()}.
+
+config_load(FilePath)
+    when is_list(FilePath) ->
+    true = lists:suffix(".config", FilePath),
+    {ok, [ApplicationEnvs]} = file:consult(FilePath),
+    config_load_application(ApplicationEnvs, []).
 
 %%-------------------------------------------------------------------------
 %% @doc
@@ -1414,6 +1433,20 @@ ensure_code_paths([P | Paths], Apps) ->
             {error, {version_mismatch, Application, VSN, InvalidVSN}};
         false ->
             {error, {not_loaded, Application, VSN}}
+    end.
+
+config_load_application([], Applications) ->
+    {ok, lists:reverse(Applications)};
+config_load_application([{Application, Env} | ApplicationEnvs], Applications) ->
+    case ensure_application_loaded(Application) of
+        ok ->
+            lists:foreach(fun({Key, Value}) ->
+                ok = application:set_env(Application, Key, Value)
+            end, Env),
+            config_load_application(ApplicationEnvs,
+                                    [Application | Applications]);
+        {error, _} = Error ->
+            Error
     end.
 
 is_module_loaded_check(Module) when is_atom(Module) ->
