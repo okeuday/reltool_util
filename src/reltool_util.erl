@@ -80,7 +80,7 @@
          module_purged/1,
          module_purged/2,
          module_exports/1,
-         module_vsn/1,
+         module_version/1,
          script_start/1,
          script_remove/1,
          script_remove/2,
@@ -702,20 +702,20 @@ module_exports(Module)
 
 %%-------------------------------------------------------------------------
 %% @doc
-%% ===Provide the current vsn of the module.===
+%% ===Provide the current version of the module.===
 %% A list is returned with an entry for each use of the -vsn attribute
 %% in the order within the module file for the currently loaded version
 %% (the result is consistent with beam_lib:version/1).
 %% @end
 %%-------------------------------------------------------------------------
 
--spec module_vsn(Module :: atom()) ->
+-spec module_version(Module :: atom()) ->
     list(any()).
 
-module_vsn(Module)
+module_version(Module)
     when is_atom(Module) ->
     {attributes, L} = lists:keyfind(attributes, 1, Module:module_info()),
-    ModuleVSN = lists:flatmap(fun(Attribute) ->
+    Version = lists:flatmap(fun(Attribute) ->
         case Attribute of
             {vsn, VSN} ->
                 VSN;
@@ -723,7 +723,7 @@ module_vsn(Module)
                 []
         end
     end, L),
-    ModuleVSN.
+    Version.
 
 %%-------------------------------------------------------------------------
 %% @doc
