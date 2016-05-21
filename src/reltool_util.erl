@@ -10,7 +10,7 @@
 %%%
 %%% BSD LICENSE
 %%% 
-%%% Copyright (c) 2013-2015, Michael Truog <mjtruog at gmail dot com>
+%%% Copyright (c) 2013-2016, Michael Truog <mjtruog at gmail dot com>
 %%% All rights reserved.
 %%% 
 %%% Redistribution and use in source and binary forms, with or without
@@ -45,8 +45,8 @@
 %%% DAMAGE.
 %%%
 %%% @author Michael Truog <mjtruog [at] gmail (dot) com>
-%%% @copyright 2013-2015 Michael Truog
-%%% @version 1.5.1 {@date} {@time}
+%%% @copyright 2013-2016 Michael Truog
+%%% @version 1.5.2 {@date} {@time}
 %%%------------------------------------------------------------------------
 
 -module(reltool_util).
@@ -80,6 +80,7 @@
          module_purged/1,
          module_purged/2,
          module_exports/1,
+         module_vsn/1,
          script_start/1,
          script_remove/1,
          script_remove/2,
@@ -698,6 +699,31 @@ module_exports(Module)
     {value, _, L1} = lists:keytake(module_info, 1, L0),
     {value, _, L2} = lists:keytake(module_info, 1, L1),
     L2.
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Provide the current vsn of the module.===
+%% A list is returned with an entry for each use of the -vsn attribute
+%% in the order within the module file for the currently loaded version
+%% (the result is consistent with beam_lib:version/1).
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec module_vsn(Module :: atom()) ->
+    list(any()).
+
+module_vsn(Module)
+    when is_atom(Module) ->
+    {attributes, L} = lists:keyfind(attributes, 1, Module:module_info()),
+    ModuleVSN = lists:flatmap(fun(Attribute) ->
+        case Attribute of
+            {vsn, VSN} ->
+                VSN;
+            _ ->
+                []
+        end
+    end, L),
+    ModuleVSN.
 
 %%-------------------------------------------------------------------------
 %% @doc
