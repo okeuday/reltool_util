@@ -74,7 +74,9 @@
          ensure_application_started/1,
          ensure_application_stopped/1,
          config_load/1,
+         module_load/1,
          module_loaded/1,
+         module_unload/1,
          is_module_loaded/1,
          is_module_loaded/2,
          module_purged/1,
@@ -585,6 +587,25 @@ config_load(FilePath)
 
 %%-------------------------------------------------------------------------
 %% @doc
+%% ===Load a module.===
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec module_load(Module :: atom()) ->
+    ok |
+    {error, any()}.
+
+module_load(Module)
+    when is_atom(Module) ->
+    case code:load_file(Module) of
+        {module, Module} ->
+            ok;
+        {error, _} = Error ->
+            Error
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc
 %% ===Make sure a module is loaded.===
 %% If the module is not loaded, attempt to load it.
 %% @end
@@ -598,14 +619,39 @@ module_loaded(Module)
     when is_atom(Module) ->
     case is_module_loaded_check(Module) of
         false ->
-            case code:load_file(Module) of
-                {module, Module} ->
-                    ok;
-                {error, _} = Error ->
-                    Error
-            end;
+            module_load(Module);
         true ->
             ok
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Unload a module.===
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec module_unload(Module :: atom()) ->
+    ok |
+    {error, any()}.
+
+module_unload(Module)
+    when is_atom(Module) ->
+    case code:delete(Module) of
+        true ->
+            ok;
+        false ->
+            case is_module_loaded_check(Module) of
+                true ->
+                    code:purge(Module),
+                    case code:delete(Module) of
+                        true ->
+                            ok;
+                        false ->
+                            {error, not_unloaded}
+                    end;
+                false ->
+                    {error, not_loaded}
+            end
     end.
 
 %%-------------------------------------------------------------------------
