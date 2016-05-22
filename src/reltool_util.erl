@@ -77,6 +77,7 @@
          module_load/1,
          module_loaded/1,
          module_unload/1,
+         module_reload/1,
          is_module_loaded/1,
          is_module_loaded/2,
          module_purged/1,
@@ -652,6 +653,27 @@ module_unload(Module)
                 false ->
                     {error, not_loaded}
             end
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc
+%% ===Reload a module.===
+%% @end
+%%-------------------------------------------------------------------------
+
+-spec module_reload(Module :: atom()) ->
+    ok |
+    {error, any()}.
+
+module_reload(Module)
+    when is_atom(Module) ->
+    code:purge(Module),
+    case code:load_file(Module) of
+        {module, Module} ->
+            code:soft_purge(Module),
+            ok;
+        {error, _} = Error ->
+            Error
     end.
 
 %%-------------------------------------------------------------------------
