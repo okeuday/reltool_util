@@ -81,7 +81,6 @@ shell_output(Shell, Output) ->
         {Shell, {data, Data}} ->
             shell_output(Shell, [Data | Output]);
         {Shell, {exit_status, Status}} ->
-            true = erlang:port_close(Shell),
             {Status, lists:reverse(Output)}
     end.
 
