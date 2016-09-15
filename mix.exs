@@ -3,7 +3,7 @@ defmodule ReltoolUtil.Mixfile do
 
   def project do
     [app: :reltool_util,
-     version: "1.5.2",
+     version: "1.5.3",
      language: :erlang,
      description: description,
      package: package,
