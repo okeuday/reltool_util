@@ -3,11 +3,11 @@ defmodule ReltoolUtil.Mixfile do
 
   def project do
     [app: :reltool_util,
-     version: "1.5.4",
+     version: "1.6.0",
      language: :erlang,
-     description: description,
-     package: package,
-     deps: deps]
+     description: description(),
+     package: package(),
+     deps: deps()]
   end
 
   defp deps do
@@ -19,7 +19,7 @@ defmodule ReltoolUtil.Mixfile do
   end
 
   defp package do
-    [files: ~w(src doc release scope rebar.config README.markdown),
+    [files: ~w(src doc release scope ex2erl rebar.config README.markdown),
      maintainers: ["Michael Truog"],
      licenses: ["BSD"],
      links: %{"GitHub" => "https://github.com/okeuday/reltool_util"}]
