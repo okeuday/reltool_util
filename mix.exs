@@ -24,7 +24,7 @@ defmodule ReltoolUtil.Mixfile do
   defp package do
     [files: ~w(src doc release scope ex2erl rebar.config README.markdown),
      maintainers: ["Michael Truog"],
-     licenses: ["BSD"],
+     licenses: ["MIT"],
      links: %{"GitHub" => "https://github.com/okeuday/reltool_util"}]
    end
 end
