@@ -342,7 +342,7 @@ application_purged(Application) ->
     ok |
     {error, any()}.
 
-application_purged(Application, Timeout)
+application_purged(Application, _Timeout)
     when is_atom(Application) ->
     case application_loaded(Application) of
         {ok, _} ->
@@ -350,7 +350,7 @@ application_purged(Application, Timeout)
                 ok ->
                     case application_modules(Application) of
                         {ok, Modules} ->
-                            case modules_purged(Modules, Timeout) of
+                            case modules_unload(Modules) of
                                 ok ->
                                     application:unload(Application);
                                 {error, _} = Error ->
@@ -713,7 +713,8 @@ is_module_loaded(Module, Timeout)
 %%-------------------------------------------------------------------------
 %% @doc
 %% ===Make sure a module is purged.===
-%% If the module is not loaded, ignore it.
+%% If the module is not loaded, ignore it. This function only purges
+%% old module versions and does not remove the current module version.
 %% @end
 %%-------------------------------------------------------------------------
 
@@ -727,7 +728,8 @@ module_purged(Module) ->
 %%-------------------------------------------------------------------------
 %% @doc
 %% ===Make sure a module is purged with a timeout.===
-%% If the module is not loaded, ignore it.
+%% If the module is not loaded, ignore it. This function only purges
+%% old module versions and does not remove the current module version.
 %% @end
 %%-------------------------------------------------------------------------
 
@@ -1614,6 +1616,16 @@ is_module_loaded_check(Module) when is_atom(Module) ->
             true;
         false ->
             false
+    end.
+
+modules_unload([]) ->
+    ok;
+modules_unload([Module | Modules]) ->
+    case module_unload(Module) of
+        ok ->
+            modules_unload(Modules);
+        {error, _} = Error ->
+            Error
     end.
 
 modules_purged(Modules, infinity) ->
