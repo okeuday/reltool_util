@@ -342,7 +342,7 @@ application_purged(Application) ->
     ok |
     {error, any()}.
 
-application_purged(Application, _Timeout)
+application_purged(Application, Timeout)
     when is_atom(Application) ->
     case application_loaded(Application) of
         {ok, _} ->
@@ -350,7 +350,7 @@ application_purged(Application, _Timeout)
                 ok ->
                     case application_modules(Application) of
                         {ok, Modules} ->
-                            case modules_unload(Modules) of
+                            case modules_purged(Modules, Timeout) of
                                 ok ->
                                     application:unload(Application);
                                 {error, _} = Error ->
@@ -713,8 +713,7 @@ is_module_loaded(Module, Timeout)
 %%-------------------------------------------------------------------------
 %% @doc
 %% ===Make sure a module is purged.===
-%% If the module is not loaded, ignore it. This function only purges
-%% old module versions and does not remove the current module version.
+%% If the module is not loaded, ignore it.
 %% @end
 %%-------------------------------------------------------------------------
 
@@ -728,8 +727,7 @@ module_purged(Module) ->
 %%-------------------------------------------------------------------------
 %% @doc
 %% ===Make sure a module is purged with a timeout.===
-%% If the module is not loaded, ignore it. This function only purges
-%% old module versions and does not remove the current module version.
+%% If the module is not loaded, ignore it.
 %% @end
 %%-------------------------------------------------------------------------
 
@@ -1621,17 +1619,14 @@ is_module_loaded_check(Module) when is_atom(Module) ->
 modules_unload([]) ->
     ok;
 modules_unload([Module | Modules]) ->
-    case module_unload(Module) of
-        ok ->
-            modules_unload(Modules);
-        {error, _} = Error ->
-            Error
-    end.
+    _ = module_unload(Module),
+    modules_unload(Modules).
 
 modules_purged(Modules, infinity) ->
-    modules_purged(Modules, [], 5000);
+    modules_purged(Modules, 5000);
 modules_purged(Modules, Timeout)
     when is_list(Modules), is_integer(Timeout), Timeout >= 0 ->
+    ok = modules_unload(Modules),
     modules_purged(Modules, [], Timeout).
 
 modules_purged([], [], _) ->
