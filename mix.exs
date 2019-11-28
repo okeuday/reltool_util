@@ -6,7 +6,7 @@ defmodule ReltoolUtil.Mixfile do
 
   def project do
     [app: :reltool_util,
-     version: "1.7.5",
+     version: "1.8.0",
      language: :erlang,
      erlc_options: [
        :debug_info,
